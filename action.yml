@@ -1,4 +1,4 @@
-name: 'Telegram Notify Action'
+name: 'Telegram Notification (Media, File & Topic)'
 description: 'Send Telegram notification from GitHub Actions. Supports text, markdown, html, file, image, and video.'
 author: 'Gravity'
 branding:

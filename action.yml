@@ -1,0 +1,140 @@
+name: 'Telegram Notify Action'
+description: 'Send Telegram notification from GitHub Actions. Supports text, markdown, html, file, image, and video.'
+author: 'Gravity'
+branding:
+  icon: 'message-circle'
+  color: 'blue'
+inputs:
+  chat_id:
+    description: 'Unique identifier for the target chat or username of the target channel'
+    required: true
+  token:
+    description: 'Telegram Bot Token'
+    required: true
+  message:
+    description: 'Text of the message to be sent (used as caption if sending media)'
+    required: false
+  topic_id:
+    description: 'Unique identifier for the target message thread (topic/message_thread_id) of the forum'
+    required: false
+  format:
+    description: 'Message format: Markdown, MarkdownV2 or HTML'
+    required: false
+    default: 'MarkdownV2'
+  disable_web_page_preview:
+    description: 'Disables link previews for links in this message (true/false)'
+    required: false
+    default: 'false'
+  photo:
+    description: 'Path to photo file or URL to send'
+    required: false
+  document:
+    description: 'Path to document file or URL to send'
+    required: false
+  video:
+    description: 'Path to video file or URL to send'
+    required: false
+  audio:
+    description: 'Path to audio file or URL to send'
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Send Telegram Notification
+      shell: bash
+      env:
+        BOT_TOKEN: ${{ inputs.token }}
+        CHAT_ID: ${{ inputs.chat_id }}
+        MSG_TEXT: ${{ inputs.message }}
+        MSG_TOPIC: ${{ inputs.topic_id }}
+        MSG_FORMAT: ${{ inputs.format }}
+        DISABLE_PREVIEW: ${{ inputs.disable_web_page_preview }}
+        PHOTO_PATH: ${{ inputs.photo }}
+        DOCUMENT_PATH: ${{ inputs.document }}
+        VIDEO_PATH: ${{ inputs.video }}
+        AUDIO_PATH: ${{ inputs.audio }}
+      run: |
+        API_URL="https://api.telegram.org/bot${BOT_TOKEN}"
+        CURL_ARGS=("-s" "-S" "-X" "POST" "-F" "chat_id=${CHAT_ID}")
+
+        if [ -n "$MSG_TOPIC" ]; then
+          CURL_ARGS+=("-F" "message_thread_id=${MSG_TOPIC}")
+        fi
+
+        if [ -n "$MSG_TEXT" ]; then
+          # Save to tmp file to handle multiline safely without quoting issues
+          TMP_MSG_FILE=$(mktemp)
+          echo "$MSG_TEXT" > "$TMP_MSG_FILE"
+        fi
+
+        add_media_arg() {
+          local field_name="$1"
+          local field_value="$2"
+          if [[ "$field_value" =~ ^https?:// ]]; then
+            CURL_ARGS+=("-F" "${field_name}=${field_value}")
+          else
+            if [ ! -f "$field_value" ]; then
+              echo "❌ Error: $field_name file not found at $field_value"
+              exit 1
+            fi
+            CURL_ARGS+=("-F" "${field_name}=@${field_value}")
+          fi
+        }
+
+        if [ -n "$PHOTO_PATH" ]; then
+          ENDPOINT="${API_URL}/sendPhoto"
+          add_media_arg "photo" "$PHOTO_PATH"
+          if [ -n "$MSG_TEXT" ]; then
+            CURL_ARGS+=("-F" "caption=<$TMP_MSG_FILE" "-F" "parse_mode=${MSG_FORMAT}")
+          fi
+        elif [ -n "$DOCUMENT_PATH" ]; then
+          ENDPOINT="${API_URL}/sendDocument"
+          add_media_arg "document" "$DOCUMENT_PATH"
+          if [ -n "$MSG_TEXT" ]; then
+            CURL_ARGS+=("-F" "caption=<$TMP_MSG_FILE" "-F" "parse_mode=${MSG_FORMAT}")
+          fi
+        elif [ -n "$VIDEO_PATH" ]; then
+          ENDPOINT="${API_URL}/sendVideo"
+          add_media_arg "video" "$VIDEO_PATH"
+          if [ -n "$MSG_TEXT" ]; then
+            CURL_ARGS+=("-F" "caption=<$TMP_MSG_FILE" "-F" "parse_mode=${MSG_FORMAT}")
+          fi
+        elif [ -n "$AUDIO_PATH" ]; then
+          ENDPOINT="${API_URL}/sendAudio"
+          add_media_arg "audio" "$AUDIO_PATH"
+          if [ -n "$MSG_TEXT" ]; then
+            CURL_ARGS+=("-F" "caption=<$TMP_MSG_FILE" "-F" "parse_mode=${MSG_FORMAT}")
+          fi
+        else
+          ENDPOINT="${API_URL}/sendMessage"
+          if [ -n "$MSG_TEXT" ]; then
+            CURL_ARGS+=("-F" "text=<$TMP_MSG_FILE" "-F" "parse_mode=${MSG_FORMAT}")
+            if [ "$DISABLE_PREVIEW" = "true" ]; then
+              CURL_ARGS+=("-F" "disable_web_page_preview=true")
+            fi
+          else
+            echo "❌ Error: You must provide a message, photo, document, video, or audio."
+            exit 1
+          fi
+        fi
+
+        # Execute request
+        HTTP_RESPONSE=$(curl -w "\nHTTP_STATUS:%{http_code}" "${CURL_ARGS[@]}" "$ENDPOINT")
+        
+        # Parse status code and body
+        HTTP_STATUS=$(echo "$HTTP_RESPONSE" | grep "HTTP_STATUS" | awk -F":" '{print $2}')
+        BODY=$(echo "$HTTP_RESPONSE" | sed -e 's/HTTP_STATUS\:.*//g')
+        
+        if [ -n "$MSG_TEXT" ]; then
+          rm -f "$TMP_MSG_FILE"
+        fi
+        
+        if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+          echo "✅ Message sent successfully!"
+          exit 0
+        else
+          echo "❌ Failed to send message. HTTP Status: $HTTP_STATUS"
+          echo "Response: $BODY"
+          exit 1
+        fi
